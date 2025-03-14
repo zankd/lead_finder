@@ -515,9 +515,7 @@ def extract_contact_info(soup, url):
     return phone, email, contact_url, address
 
 def visit_and_check_website(url, business_name):
-    """Visit a website and check for chatbots and extract required information"""
     try:
-        # Get the page content
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -581,7 +579,7 @@ def navigate_to_next_page():
     
     # Try multiple next page button images with different confidence levels
     next_button = None
-    for image_path in ["img/next_page.png", "img/next_pagev.png"]:
+    for image_path in ["img/next_page.png", "img/next_pagev.png", "img/nn.png"]:
         if os.path.exists(image_path):
             for confidence in [0.8, 0.7, 0.6, 0.5]:
                 next_button = locate_button(image_path, timeout=3, confidence=confidence)
