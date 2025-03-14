@@ -60,21 +60,40 @@ def save_visited_urls(file_path, visited_urls):
     # Ensure we don't lose existing URLs when saving
     existing_urls = set()
     if os.path.exists(file_path):
-        with open(file_path, 'r') as file:
-            for line in file:
-                url = line.strip()
-                if url:
-                    existing_urls.add(url)
+        try:
+            with open(file_path, 'r') as file:
+                for line in file:
+                    url = line.strip()
+                    if url:
+                        existing_urls.add(url)
+        except Exception as e:
+            logging.error(f"Error reading existing URLs: {str(e)}")
     
     # Combine with new URLs
     all_urls = existing_urls.union(visited_urls)
     
-    # Write all URLs back to file
-    with open(file_path, 'w') as file:
-        for url in all_urls:
-            file.write(url + '\n')
-    
-    logging.info(f"Saved {len(all_urls)} URLs to {file_path}")
+    # Write all URLs back to file with error handling and immediate flush
+    try:
+        with open(file_path, 'w') as file:
+            for url in all_urls:
+                file.write(url + '\n')
+            file.flush()  # Force write to disk immediately
+            os.fsync(file.fileno())  # Ensure it's written to the physical disk
+        
+        logging.info(f"Saved {len(all_urls)} URLs to {file_path}")
+    except Exception as e:
+        logging.error(f"Error saving URLs to file: {str(e)}")
+        # Try alternative approach with append mode if write mode fails
+        try:
+            with open(file_path, 'a') as file:
+                for url in visited_urls:
+                    if url not in existing_urls:
+                        file.write(url + '\n')
+                file.flush()
+                os.fsync(file.fileno())
+            logging.info(f"Saved new URLs using append mode")
+        except Exception as append_error:
+            logging.error(f"Error saving URLs in append mode: {str(append_error)}")
 
 def initialize_csv():
     if not os.path.exists(results_csv):
@@ -96,11 +115,26 @@ def save_to_csv(search_term, business_name, url, has_chatbot, phone, email, cont
     if cleaned_location and cleaned_location.lower().startswith("locations"):
         cleaned_location = cleaned_location[9:].strip()  # Remove 'Locations' and any leading whitespace
     
-    with open(results_csv, 'a', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        # Ensure the order matches the desired format: Search Term,URL,Title,Description,Has Chatbot,Phone,Email,Contact URL,Location
-        writer.writerow([search_term, url, business_name, description, has_chatbot_formatted, formatted_phone, email, contact_url, cleaned_location])
-    logging.info(f"Saved data for {business_name} - {url}")
+    try:
+        with open(results_csv, 'a', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            # Ensure the order matches the desired format: Search Term,URL,Title,Description,Has Chatbot,Phone,Email,Contact URL,Location
+            writer.writerow([search_term, url, business_name, description, has_chatbot_formatted, formatted_phone, email, contact_url, cleaned_location])
+            file.flush()  # Force write to disk immediately
+            os.fsync(file.fileno())  # Ensure it's written to the physical disk
+        logging.info(f"Saved data for {business_name} - {url}")
+    except Exception as e:
+        logging.error(f"Error saving data to CSV for {url}: {str(e)}")
+        # Try alternative approach with direct file writing if CSV writer fails
+        try:
+            with open(results_csv, 'a', encoding='utf-8') as file:
+                row_data = f'"{search_term}","{url}","{business_name}","{description}","{has_chatbot_formatted}","{formatted_phone}","{email}","{contact_url}","{cleaned_location}"\n'
+                file.write(row_data)
+                file.flush()
+                os.fsync(file.fileno())
+            logging.info(f"Saved data using alternative method for {business_name}")
+        except Exception as alt_error:
+            logging.error(f"Alternative CSV save method failed: {str(alt_error)}")
 
 def locate_button(image_path, timeout=10, region=None, confidence=0.8):
     start_time = time.time()
@@ -224,7 +258,7 @@ def count_website_buttons(timeout=5):
     screen_width, screen_height = pyautogui.size()
     all_buttons = []
     y_position = 300  # Start from top of results
-    max_scroll_attempts = 5  # Maximum number of scroll attempts
+    max_scroll_attempts = 7  # Increased maximum number of scroll attempts
     scroll_attempts = 0
     last_button_count = 0
     
@@ -232,14 +266,18 @@ def count_website_buttons(timeout=5):
     while y_position < screen_height - 100:
         region = (0, y_position, screen_width, 300)  # Search in a window of 300px height
         try:
-            button = pyautogui.locateOnScreen("img/webss.png", confidence=0.7, region=region)
-            if button:
-                center_x, center_y = pyautogui.center(button)
-                # Check if this button is already in our list (avoid duplicates)
-                if not any(abs(center_y - y) < 20 for _, y in all_buttons):
-                    all_buttons.append((center_x, center_y))
-                y_position = center_y + 50  # Move past this button
-            else:
+            # Try multiple confidence levels for better detection
+            for confidence in [0.8, 0.7, 0.6, 0.5]:
+                button = pyautogui.locateOnScreen("img/webss.png", confidence=confidence, region=region)
+                if button:
+                    center_x, center_y = pyautogui.center(button)
+                    # Check if this button is already in our list (avoid duplicates)
+                    if not any(abs(center_y - y) < 20 and abs(center_x - x) < 20 for x, y in all_buttons):
+                        all_buttons.append((center_x, center_y))
+                        logging.info(f"Found website button at ({center_x}, {center_y}) with confidence {confidence}")
+                    y_position = center_y + 50  # Move past this button
+                    break
+            else:  # No button found at any confidence level
                 y_position += 200  # Move down if no button found
         except Exception as e:
             logging.warning(f"Error during button counting: {str(e)}")
@@ -252,27 +290,31 @@ def count_website_buttons(timeout=5):
         
         # Scroll down to reveal more results
         pyautogui.scroll(-700)  # Scroll down
-        time.sleep(1)  # Wait for scroll to complete
+        time.sleep(1.5)  # Increased wait time for scroll to complete
         
         # Scan the newly revealed area
         y_position = 300  # Reset scan position after scroll
         while y_position < screen_height - 100:
             region = (0, y_position, screen_width, 300)
             try:
-                button = pyautogui.locateOnScreen("img/webss.png", confidence=0.7, region=region)
-                if button:
-                    center_x, center_y = pyautogui.center(button)
-                    # Check if this button is already in our list (avoid duplicates)
-                    if not any(abs(center_y - y) < 20 for _, y in all_buttons):
-                        all_buttons.append((center_x, center_y))
-                    y_position = center_y + 50
-                else:
+                # Try multiple confidence levels for better detection
+                for confidence in [0.8, 0.7, 0.6, 0.5]:
+                    button = pyautogui.locateOnScreen("img/webss.png", confidence=confidence, region=region)
+                    if button:
+                        center_x, center_y = pyautogui.center(button)
+                        # Check if this button is already in our list (avoid duplicates)
+                        if not any(abs(center_y - y) < 20 and abs(center_x - x) < 20 for x, y in all_buttons):
+                            all_buttons.append((center_x, center_y))
+                            logging.info(f"Found website button at ({center_x}, {center_y}) with confidence {confidence} after scroll")
+                        y_position = center_y + 50
+                        break
+                else:  # No button found at any confidence level
                     y_position += 200
             except Exception as e:
                 logging.warning(f"Error during button counting after scroll: {str(e)}")
                 y_position += 200
         
-        # If we didn't find any new buttons after scrolling, try one more time then stop
+        # If we didn't find any new buttons after scrolling, try again
         if len(all_buttons) == last_button_count:
             scroll_attempts += 1
         else:
@@ -302,9 +344,28 @@ def click_website_button(timeout=5, previous_y=None, button_positions=None, butt
                 logging.warning(f"Button coordinates ({center_x}, {center_y}) are outside screen bounds ({screen_width}x{screen_height})")
                 return None, False
             
+            # Ensure the button is visible - scroll if needed
+            if center_y > screen_height - 200:
+                # Need to scroll down to make button visible
+                scroll_amount = min(center_y - (screen_height // 2), 700)  # Don't scroll too much at once
+                pyautogui.scroll(-scroll_amount)  # Negative to scroll down
+                time.sleep(1.5)  # Wait for scroll to complete
+                
+                # Recalculate button position after scroll
+                try:
+                    # Try to locate the button again after scrolling
+                    region = (center_x - 100, center_y - 300, 200, 600)  # Search around expected position
+                    button = pyautogui.locateOnScreen("img/webss.png", confidence=0.6, region=region)
+                    if button:
+                        center_x, center_y = pyautogui.center(button)
+                        logging.info(f"Recalculated button position after scroll: ({center_x}, {center_y})")
+                except Exception as scroll_error:
+                    logging.warning(f"Error recalculating position after scroll: {str(scroll_error)}")
+                    # Continue with original coordinates
+            
             # Open in new tab
             pyautogui.moveTo(center_x, center_y)
-            time.sleep(0.5)  # Small delay to ensure cursor is positioned
+            time.sleep(0.8)  # Increased delay to ensure cursor is positioned
             
             # Try to click with error handling
             try:
@@ -316,7 +377,7 @@ def click_website_button(timeout=5, previous_y=None, button_positions=None, butt
                 # Try alternative approach
                 try:
                     pyautogui.click(button='right')
-                    time.sleep(0.5)
+                    time.sleep(0.8)
                     pyautogui.press('t')  # 'Open in new tab' option
                 except Exception as alt_error:
                     logging.error(f"Alternative click method failed: {str(alt_error)}")
@@ -324,7 +385,7 @@ def click_website_button(timeout=5, previous_y=None, button_positions=None, butt
             
             # Move cursor to avoid hover effects
             pyautogui.moveTo(center_x, center_y + result_offset)
-            time.sleep(3)
+            time.sleep(3.5)  # Increased wait time for tab to open
             return center_y + result_offset, True  # Return position and success flag
         except Exception as e:
             logging.error(f"Error using pre-counted button {button_index}: {str(e)}")
@@ -395,10 +456,13 @@ def click_website_button(timeout=5, previous_y=None, button_positions=None, butt
 
 def process_business_listing(main_window, visited_urls, search_term, last_y_position, button_positions=None, button_index=0):
     try:
-        # Check if main window is still valid before activating
+        # Store the original window title to help identify the main results tab
+        original_title = None
         try:
             main_window.activate()
-            time.sleep(1)
+            time.sleep(2)  # Increased delay for reliable window activation
+            original_title = main_window.title
+            logging.info(f"Original tab title: {original_title}")
         except Exception as window_error:
             logging.error(f"Window activation error: {str(window_error)}")
             # Try to recover by finding a Chrome window
@@ -407,7 +471,9 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
                 main_window = chrome_windows[0]
                 try:
                     main_window.activate()
-                    time.sleep(1)
+                    time.sleep(2)  # Increased delay
+                    original_title = main_window.title
+                    logging.info(f"Recovered tab title: {original_title}")
                 except Exception:
                     logging.error("Failed to recover main window")
                     return False, last_y_position
@@ -420,35 +486,64 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
         if not success:
             return False, last_y_position
         
-        time.sleep(3)
+        # Wait longer for the new tab to open completely
+        time.sleep(4)
         
-        # Switch to new tab
-        pyautogui.hotkey('ctrl', 'tab')
-        time.sleep(1)
+        # Try different tab switching methods
+        tab_switch_success = False
+        
+        # Method 1: Use ctrl+tab
+        try:
+            pyautogui.hotkey('ctrl', 'tab')
+            time.sleep(2)
+            current_window = gw.getActiveWindow()
+            if current_window and original_title not in current_window.title:
+                tab_switch_success = True
+                logging.info("Successfully switched to new tab using ctrl+tab")
+        except Exception as tab_error:
+            logging.warning(f"Error switching tabs with ctrl+tab: {str(tab_error)}")
+        
+        # Method 2: If first method failed, try cycling through tabs
+        if not tab_switch_success:
+            try:
+                # Try to find the newly opened tab by cycling through tabs
+                for _ in range(5):  # Try up to 5 tabs
+                    pyautogui.hotkey('ctrl', 'tab')
+                    time.sleep(1)
+                    current_window = gw.getActiveWindow()
+                    if current_window and original_title not in current_window.title:
+                        tab_switch_success = True
+                        logging.info("Successfully switched to new tab by cycling")
+                        break
+            except Exception as cycle_error:
+                logging.warning(f"Error cycling through tabs: {str(cycle_error)}")
         
         try:
+            # Get the current URL with our improved method
             current_url = get_current_url()
+            
+            # If URL retrieval failed, try again after a short delay
+            if not current_url:
+                time.sleep(2)
+                current_url = get_current_url()
+                if not current_url:
+                    logging.error("Failed to retrieve URL after multiple attempts")
+                    # Close tab and return to main tab
+                    pyautogui.hotkey('ctrl', 'w')
+                    time.sleep(1)
+                    return_to_main_tab(original_title)
+                    return False, new_y
+            
             base_url = get_base_url(current_url)
             
             if current_url in visited_urls or base_url in visited_urls:
                 logging.info(f"Skipping duplicate: {current_url}")
                 # Close tab and return
                 pyautogui.hotkey('ctrl', 'w')
-                time.sleep(1)
+                time.sleep(1.5)  # Increased delay
                 
-                # Safely activate main window
-                try:
-                    main_window.activate()
-                except Exception as window_error:
-                    logging.warning(f"Window activation error after duplicate: {str(window_error)}")
-                    # Try to recover by finding a Chrome window
-                    chrome_windows = gw.getWindowsWithTitle("Google Chrome")
-                    if chrome_windows:
-                        main_window = chrome_windows[0]
-                        try:
-                            main_window.activate()
-                        except Exception:
-                            pass
+                # Return to main results tab using tab cycling and title matching
+                return_to_main_tab(original_title)
                 
                 return False, new_y
             
@@ -457,35 +552,53 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
             visited_urls.add(base_url)
             
             # Save to visited_urls.txt immediately to prevent duplicates across runs
-            with open(visited_urls_file, 'a') as file:
-                file.write(current_url + '\n')
+            try:
+                with open(visited_urls_file, 'a') as file:
+                    file.write(current_url + '\n')
+                    file.flush()  # Force write to disk immediately
+                    os.fsync(file.fileno())  # Ensure it's written to the physical disk
+            except Exception as file_error:
+                logging.error(f"Error saving to visited_urls.txt: {str(file_error)}")
             
             page_title = get_page_title()
             
             # Perform scraping with updated return values
             has_chatbot, phone, email, contact_url, address, description, location = visit_and_check_website(current_url, page_title)
-            save_to_csv(search_term, page_title, current_url, has_chatbot, phone, email, contact_url, address, description, location)
+            
+            # Save to CSV with immediate flush to ensure data is written
+            try:
+                save_to_csv(search_term, page_title, current_url, has_chatbot, phone, email, contact_url, address, description, location)
+            except Exception as csv_error:
+                logging.error(f"Error saving to CSV: {str(csv_error)}")
             
         except Exception as e:
             logging.error(f"Processing error: {str(e)}")
         finally:
-            # Close tab and return
-            pyautogui.hotkey('ctrl', 'w')
-            time.sleep(1)
-            
-            # Safely activate main window
+            # Make sure we're on the correct tab before closing
             try:
-                main_window.activate()
-            except Exception as window_error:
-                logging.warning(f"Window activation error in finally block: {str(window_error)}")
-                # Try to recover by finding a Chrome window
+                # Get all Chrome windows to check if we're on the right tab
                 chrome_windows = gw.getWindowsWithTitle("Google Chrome")
-                if chrome_windows:
-                    main_window = chrome_windows[0]
-                    try:
-                        main_window.activate()
-                    except Exception:
-                        pass
+                current_window = gw.getActiveWindow()
+                
+                # Only close tab if we're not on the main search tab
+                if current_window and original_title not in current_window.title:
+                    # Close tab and return
+                    pyautogui.hotkey('ctrl', 'w')
+                    time.sleep(1.5)  # Increased delay
+                
+                # Return to main results tab using tab cycling and title matching
+                return_to_main_tab(original_title)
+            except Exception as tab_error:
+                logging.error(f"Error managing tabs: {str(tab_error)}")
+                # Try to recover by finding a Chrome window with Google in the title
+                try:
+                    chrome_windows = gw.getWindowsWithTitle("Google Chrome")
+                    for window in chrome_windows:
+                        if "Google" in window.title:
+                            window.activate()
+                            break
+                except Exception:
+                    pass
             
             return True, new_y
     
@@ -493,256 +606,122 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
         logging.error(f"Process error: {str(e)}")
         return False, last_y_position
 
-def process_search_term(search_term):
-    """Process a single search term"""
-    logging.info(f"\n{'#'*50}\nStarting search for: {search_term}\n{'#'*50}")
+
+def return_to_main_tab(original_title):
+    """Attempt to return to the main search results tab using multiple strategies"""
+    if not original_title:
+        logging.warning("No original title available for tab navigation")
+        return False
     
-    visited_urls = load_visited_urls(visited_urls_file)
-    main_window = open_search_engine(search_term)
-    
-    if not main_window:
-        return
-    
-    # Click on Places tab
-    if not click_places_tab():
-        logging.error(f"Could not access Places tab for '{search_term}'")
-        return
-    
-    for page in range(1, max_pages + 1):
-        logging.info(f"Processing Places page {page} for '{search_term}'")
-        
-        # Process multiple business listings on the current page
-        processed_count = 0
-        max_businesses_per_page = 10
-        
-        with alive_bar(max_businesses_per_page, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
-            last_y = None  # Initialize position tracking
-            for business_idx in range(max_businesses_per_page):
-                # Make sure main window is active
-                main_window.activate()
+    # First strategy: Try to find a window with the original title
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        try:
+            # Get all Chrome windows
+            chrome_windows = gw.getWindowsWithTitle("Google Chrome")
+            if not chrome_windows:
+                logging.warning("No Chrome windows found, trying to recover")
                 time.sleep(1)
+                continue
                 
-                # Process current business with position tracking
-                result, new_y = process_business_listing(main_window, visited_urls, search_term, last_y)
-                if result:
-                    processed_count += 1
-                    last_y = new_y  # Update position tracking
-                
-                bar()
-                
-                if business_idx % 2 == 1:
-                    main_window.activate()
+            current_window = gw.getActiveWindow()
+            
+            if current_window and original_title in current_window.title:
+                logging.info("Already on the correct tab")
+                return True
+            
+            # Check if any window has our original title
+            for window in chrome_windows:
+                if original_title in window.title:
+                    window.activate()
+                    time.sleep(1)  # Increased delay for reliable activation
+                    logging.info(f"Found and activated original tab with title: {window.title}")
+                    return True
+            
+            # If we didn't find the exact title, try cycling through tabs
+            logging.info(f"Original tab not found by title, cycling through tabs (attempt {attempt+1}/{max_attempts})")
+            
+            # Try to identify the tab by looking for 'Google Search' or 'plumbers new york' in the title
+            for window in chrome_windows:
+                if ("Google Search" in window.title or 
+                    "plumbers new york" in window.title.lower() or
+                    "Google Maps" in window.title):
+                    window.activate()
                     time.sleep(1)
-                    scroll_down_for_more_results()
-                    time.sleep(2)
-                    last_y = None
-                
-                time.sleep(1.5)
+                    logging.info(f"Found Google search tab by title keywords: {window.title}")
+                    return True
+            
+            # If still not found, cycle through tabs
+            pyautogui.hotkey('ctrl', 'tab')
+            time.sleep(1)  # Increased delay
+            
+            # Check if we're now on a Google search results page
+            current_window = gw.getActiveWindow()
+            if current_window and ("Google Search" in current_window.title or 
+                                  "Google Maps" in current_window.title or
+                                  "plumbers new york" in current_window.title.lower()):
+                logging.info(f"Found Google search tab: {current_window.title}")
+                return True
+            
+        except Exception as e:
+            logging.warning(f"Error during tab navigation attempt {attempt+1}: {str(e)}")
         
-        logging.info(f"Processed {processed_count} businesses on page {page}")
-        
-        # Navigate to the next page if not on the last page
-        if page < max_pages:
-            # Make sure main window is active
-            main_window.activate()
-            time.sleep(1)
-            if not navigate_to_next_page():
-                logging.warning(f"Could not navigate to page {page+1}, stopping")
-                break
+        time.sleep(1)  # Increased delay between attempts
     
-    # Close the main window
+    # Second strategy: Try to use keyboard shortcuts to get back to the first tab
+    logging.warning("Using second strategy for tab navigation")
     try:
-        main_window.close()
-    except:
-        pass
-
-def get_current_url():
-    try:
-        # Try multiple times to get the URL
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                pyautogui.hotkey('ctrl', 'l')
-                time.sleep(0.8)
-                
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.7)
-                
-                pyautogui.hotkey('ctrl', 'c')
-                time.sleep(0.6)
-                
-                url = pyperclip.paste().strip()
-                
-                # Validate URL format
-                if url and url.startswith(('http://', 'https://')):
-                    return url
-                else:
-                    logging.warning(f"Invalid URL format on attempt {attempt+1}: {url}")
-                    time.sleep(1)  # Wait before retrying
-            except Exception as e:
-                logging.warning(f"Error getting URL on attempt {attempt+1}: {str(e)}")
-                time.sleep(1)  # Wait before retrying
+        # First go to the first tab
+        pyautogui.hotkey('ctrl', '1')
+        time.sleep(1.5)  # Increased delay
         
-        # If we get here, all attempts failed
-        logging.error("Failed to get current URL after multiple attempts")
-        return ""
+        # Check if we're on a Google search page
+        current_window = gw.getActiveWindow()
+        if current_window and ("Google Search" in current_window.title or 
+                              "Google Maps" in current_window.title or
+                              "plumbers new york" in current_window.title.lower()):
+            logging.info(f"Found Google search tab using ctrl+1: {current_window.title}")
+            return True
+        
+        # If not, try cycling through tabs
+        for tab_num in range(2, 6):  # Try tabs 2-5
+            pyautogui.hotkey('ctrl', str(tab_num))
+            time.sleep(1.5)
+            current_window = gw.getActiveWindow()
+            if current_window and ("Google Search" in current_window.title or 
+                                  "Google Maps" in current_window.title or
+                                  "plumbers new york" in current_window.title.lower()):
+                logging.info(f"Found Google search tab using ctrl+{tab_num}: {current_window.title}")
+                return True
     except Exception as e:
-        logging.error(f"Unexpected error in get_current_url: {str(e)}")
-        return ""
-
-def get_page_title():
-    """Get the page title"""
-    active_window = gw.getActiveWindow()
-    if not active_window:
-        return "Unknown"
+        logging.error(f"Second strategy tab navigation failed: {str(e)}")
     
-    title = active_window.title
-    if " - " in title:
-        title = title.split(" - ")[0]
-    return title
-
-def detect_chatbot(soup):
-    for marker in chatbot_markers:
-        elements = soup.select(f'[id*="{marker}"], [class*="{marker}"], [data-*="{marker}"]')
-        if elements:
-            return True
+    # Last resort: Try to use alt+tab to switch between applications
+    logging.warning("Using last resort tab navigation with alt+tab")
+    try:
+        # Try alt+tab to cycle through windows
+        pyautogui.hotkey('alt', 'tab')
+        time.sleep(1.5)
+        
+        # Check if we're on a Google window
+        current_window = gw.getActiveWindow()
+        if current_window and "Google Chrome" in current_window.title:
+            # Now try to find the right tab
+            for _ in range(10):  # Try up to 10 tabs
+                pyautogui.hotkey('ctrl', 'tab')
+                time.sleep(1)
+                current_window = gw.getActiveWindow()
+                if current_window and ("Google Search" in current_window.title or 
+                                      "Google Maps" in current_window.title or
+                                      "plumbers new york" in current_window.title.lower()):
+                    logging.info(f"Found Google search tab after alt+tab: {current_window.title}")
+                    return True
+    except Exception as e:
+        logging.error(f"Last resort tab navigation failed: {str(e)}")
     
-    iframes = soup.find_all('iframe')
-    for iframe in iframes:
-        src = iframe.get('src', '')
-        if any(bot_provider in src for bot_provider in ['chat-widget', 'livechat', 'chat-bot', 'chatbot', 'live-chat', 
-    'bot-widget', 'zendesk', 'intercom', 'drift', 'freshchat',
-    'crisp', 'tawk', 'liveperson', 'olark', 'userlike',
-    'chat_widget', 'chat_container', 'chat_bubble', 'chat_frame']):
-            return True
-    
-    scripts = soup.find_all('script')
-    for script in scripts:
-        src = script.get('src', '')
-        if any(bot_provider in src for bot_provider in ['chat-widget', 'livechat', 'chat-bot', 'chatbot', 'live-chat', 
-    'bot-widget', 'zendesk', 'intercom', 'drift', 'freshchat',
-    'crisp', 'tawk', 'liveperson', 'olark', 'userlike',
-    'chat_widget', 'chat_container', 'chat_bubble', 'chat_frame']):
-            return True
-    
+    logging.error("Failed to return to main tab after multiple attempts")
     return False
 
-def extract_contact_info(soup, url):
-    phone = ""
-    email = ""
-    contact_url = ""
-    address = ""
-    
-    phone_elements = soup.select('a[href^="tel:"]')
-    if phone_elements:
-        phone = phone_elements[0].get('href').replace('tel:', '')
-    
-    # Extract email addresses
-    email_elements = soup.select('a[href^="mailto:"]')
-    if email_elements:
-        email = email_elements[0].get('href').replace('mailto:', '')
-    
-    # Look for contact page link
-    contact_links = soup.find_all('a', string=lambda s: s and ('contact' in s.lower() or 'get in touch' in s.lower()))
-    if contact_links:
-        contact_href = contact_links[0].get('href', '')
-        if contact_href:
-            contact_url = urljoin(url, contact_href)
-    
-    # Look for address information
-    address_elements = soup.find_all(['p', 'div', 'span'], 
-                                    string=lambda s: s and any(x in s.lower() for x in ['address', 'location', 'street', 'avenue', 'blvd', 'road']))
-    if address_elements:
-        address = address_elements[0].get_text().strip()
-    
-    return phone, email, contact_url, address
-
-def visit_and_check_website(url, business_name):
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        has_chatbot = detect_chatbot(soup)
-        
-        # Extract contact information
-        phone, email, contact_url, address = extract_contact_info(soup, url)
-        
-        # Extract description
-        description = ""
-        meta_desc = soup.find('meta', {'name': 'description'}) or soup.find('meta', {'property': 'og:description'})
-        if meta_desc:
-            description = meta_desc.get('content', '').strip()
-        if not description:
-            # Try to get first paragraph or div with substantial text
-            for tag in soup.find_all(['p', 'div']):
-                text = tag.get_text().strip()
-                if len(text) > 100:  # Only consider substantial text
-                    description = text
-                    break
-        
-        # Extract location from address if not explicitly provided
-        location = address
-        if not location:
-            location_elements = soup.find_all(['p', 'div', 'span'],
-                string=lambda s: s and any(x in s.lower() for x in ['location', 'based in', 'located in', 'serving']))
-            if location_elements:
-                location = location_elements[0].get_text().strip()
-        
-        for _ in range(3):
-            pyautogui.scroll(-500)
-            time.sleep(1)
-        
-        return has_chatbot, phone, email, contact_url, address, description, location
-    
-    except Exception as e:
-        logging.error(f"Error visiting {url} for {business_name}: {str(e)}")
-        return False, "", "", "", "", "", ""
-
-def scroll_down_for_more_results():
-    try:
-        screen_width, screen_height = pyautogui.size()
-        
-        pyautogui.press('pagedown', presses=2, interval=0.5)
-        time.sleep(1)
-        
-        pyautogui.moveTo(screen_width//2, screen_height//2)
-    except Exception as e:
-        logging.error(f"Scrolling error: {str(e)}")
-
-def navigate_to_next_page():
-    logging.info("Navigating to next page")
-    
-    # Scroll down to find the next page button
-    for _ in range(10):
-        pyautogui.scroll(-700)
-        time.sleep(0.5)
-    
-    # Try multiple next page button images with different confidence levels
-    next_button = None
-    for image_path in ["img/next_page.png", "img/next_pagev.png", "img/nn.png"]:
-        if os.path.exists(image_path):
-            for confidence in [0.8, 0.7, 0.6, 0.5]:
-                next_button = locate_button(image_path, timeout=3, confidence=confidence)
-                if next_button:
-                    logging.info(f"Found next page button using {image_path} with confidence {confidence}")
-                    break
-        if next_button:
-            break
-    
-    if next_button:
-        # Click the next page button
-        center_x, center_y = pyautogui.center(next_button)
-        pyautogui.click(center_x, center_y)
-        logging.info(f"Clicked next page button at position ({center_x}, {center_y})")
-        time.sleep(5)  # Wait for page to load
-        return True
-    else:
-        logging.warning("Next page button not found")
-        return False
-
 def process_search_term(search_term):
     """Process a single search term"""
     logging.info(f"\n{'#'*50}\nStarting search for: {search_term}\n{'#'*50}")
@@ -753,10 +732,26 @@ def process_search_term(search_term):
     if not main_window:
         return
     
+    # Store the original window title for tab tracking
+    original_title = None
+    try:
+        original_title = main_window.title
+        logging.info(f"Original search window title: {original_title}")
+    except Exception as e:
+        logging.warning(f"Could not get original window title: {str(e)}")
+    
     # Click on Places tab
     if not click_places_tab():
         logging.error(f"Could not access Places tab for '{search_term}'")
         return
+    
+    # Update the original title after clicking Places tab as it may have changed
+    try:
+        main_window = gw.getActiveWindow()
+        original_title = main_window.title
+        logging.info(f"Updated search window title after Places tab: {original_title}")
+    except Exception as e:
+        logging.warning(f"Could not update window title: {str(e)}")
     
     for page in range(1, max_pages + 1):
         logging.info(f"Processing Places page {page} for '{search_term}'")
@@ -802,7 +797,12 @@ def process_search_term(search_term):
             
             with alive_bar(max_businesses_per_page, title=f'Places Page {page} (Fallback)', bar='filling', spinner='dots_waves') as bar:
                 for business_idx in range(max_businesses_per_page):
+                    # Ensure we're on the main results tab
+                    if original_title:
+                        return_to_main_tab(original_title)
+                    
                     try:
+                        main_window = gw.getActiveWindow()
                         main_window.activate()
                     except Exception as window_error:
                         logging.warning(f"Window activation error in fallback: {str(window_error)}")
@@ -833,7 +833,12 @@ def process_search_term(search_term):
                     
                     # Scroll down after every few businesses
                     if business_idx % 3 == 2:
+                        # Ensure we're on the main results tab
+                        if original_title:
+                            return_to_main_tab(original_title)
+                        
                         try:
+                            main_window = gw.getActiveWindow()
                             main_window.activate()
                             time.sleep(1)
                             scroll_down_for_more_results()
@@ -853,7 +858,12 @@ def process_search_term(search_term):
                 
                 # Process each button one by one
                 for button_idx in range(num_buttons):
+                    # Ensure we're on the main results tab
+                    if original_title:
+                        return_to_main_tab(original_title)
+                    
                     try:
+                        main_window = gw.getActiveWindow()
                         main_window.activate()
                     except Exception as window_error:
                         logging.warning(f"Window activation error for button {button_idx}: {str(window_error)}")
@@ -894,7 +904,12 @@ def process_search_term(search_term):
                     
                     # Scroll down periodically to ensure buttons remain visible
                     if button_idx > 0 and button_idx % 3 == 0:
+                        # Ensure we're on the main results tab
+                        if original_title:
+                            return_to_main_tab(original_title)
+                        
                         try:
+                            main_window = gw.getActiveWindow()
                             main_window.activate()
                             time.sleep(1)
                             scroll_down_for_more_results()
@@ -920,8 +935,13 @@ def process_search_term(search_term):
         
         # Navigate to the next page if not on the last page
         if page < max_pages:
+            # Ensure we're on the main results tab
+            if original_title:
+                return_to_main_tab(original_title)
+            
             # Make sure main window is active
             try:
+                main_window = gw.getActiveWindow()
                 main_window.activate()
                 time.sleep(1)
                 if not navigate_to_next_page():
@@ -943,6 +963,102 @@ def process_search_term(search_term):
                 window.close()
         except:
             pass
+
+def get_current_url():
+    """Get the URL of the current tab using clipboard"""
+    # Use keyboard shortcut to copy current URL to clipboard
+    pyautogui.hotkey('alt', 'd')  # Select address bar
+    time.sleep(0.8)  # Increased delay for reliability
+    pyautogui.hotkey('ctrl', 'a')  # Select all text in address bar
+    time.sleep(0.5)
+    pyautogui.hotkey('ctrl', 'c')  # Copy URL to clipboard
+    time.sleep(0.8)  # Increased delay for reliability
+    
+    # Get URL from clipboard with retry mechanism
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        url = pyperclip.paste()
+        if url and url.startswith('http'):
+            logging.info(f"Retrieved URL from clipboard: {url}")
+            return url
+        else:
+            logging.warning(f"Failed to get valid URL on attempt {attempt+1}, retrying...")
+            # Try again with different approach
+            pyautogui.hotkey('alt', 'd')  # Select address bar
+            time.sleep(0.8)
+            pyautogui.hotkey('ctrl', 'c')  # Copy URL to clipboard
+            time.sleep(0.8)
+    
+    # If we get here, we couldn't get a valid URL
+    logging.error("Failed to retrieve valid URL after multiple attempts")
+    return ""  # Return empty string instead of None to avoid errors
+
+def get_page_title():
+    """Get the title of the current page"""
+    try:
+        current_window = gw.getActiveWindow()
+        if current_window:
+            title = current_window.title
+            # Remove browser name from title if present
+            if ' - Google Chrome' in title:
+                title = title.replace(' - Google Chrome', '')
+            return title
+    except Exception as e:
+        logging.error(f"Error getting page title: {str(e)}")
+    
+    return "Unknown Title"
+
+def scroll_down_for_more_results():
+    """Scroll down to reveal more results"""
+    try:
+        # Scroll down gradually in smaller increments for smoother scrolling
+        for _ in range(3):
+            pyautogui.scroll(-250)  # Smaller increments
+            time.sleep(0.5)  # Short pause between scrolls
+        
+        # Wait for page to settle and load new content
+        time.sleep(1.5)  # Increased wait time
+        
+        logging.info("Scrolled down for more results")
+        return True
+    except Exception as e:
+        logging.error(f"Error scrolling for more results: {str(e)}")
+        # Try alternative approach if standard scroll fails
+        try:
+            # Use Page Down key as alternative
+            pyautogui.press('pagedown')
+            time.sleep(1.5)
+            logging.info("Used Page Down key as alternative scroll method")
+            return True
+        except Exception as alt_error:
+            logging.error(f"Alternative scroll method failed: {str(alt_error)}")
+            return False
+
+def scroll_down_for_more_results():
+    """Scroll down to reveal more results"""
+    try:
+        # Scroll down gradually in smaller increments for smoother scrolling
+        for _ in range(3):
+            pyautogui.scroll(-250)  # Smaller increments
+            time.sleep(0.5)  # Short pause between scrolls
+        
+        # Wait for page to settle and load new content
+        time.sleep(1.5)  # Increased wait time
+        
+        logging.info("Scrolled down for more results")
+        return True
+    except Exception as e:
+        logging.error(f"Error scrolling for more results: {str(e)}")
+        # Try alternative approach if standard scroll fails
+        try:
+            # Use Page Down key as alternative
+            pyautogui.press('pagedown')
+            time.sleep(1.5)
+            logging.info("Used Page Down key as alternative scroll method")
+            return True
+        except Exception as alt_error:
+            logging.error(f"Alternative scroll method failed: {str(alt_error)}")
+            return False
 
 def main():
     # Initialize the CSV file
@@ -975,3 +1091,160 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def navigate_to_next_page():
+    """Navigate to the next page of search results"""
+    try:
+        logging.info("Navigating to next page")
+        
+        # First, scroll to the bottom of the page to ensure next button is visible
+        for _ in range(3):
+            pyautogui.scroll(-500)  # Scroll down in smaller increments
+            time.sleep(0.8)
+        
+        # Try to find the next page button with multiple confidence levels
+        for confidence in [0.8, 0.7, 0.6, 0.5]:
+            next_button = locate_button("img/next_page.png", timeout=3, confidence=confidence)
+            if next_button:
+                logging.info(f"Found next page button using img/next_page.png with confidence {confidence}")
+                center_x, center_y = pyautogui.center(next_button)
+                # Move mouse to button position first
+                pyautogui.moveTo(center_x, center_y)
+                time.sleep(0.5)  # Small pause before clicking
+                pyautogui.click()
+                logging.info(f"Clicked next page button at position ({center_x}, {center_y})")
+                time.sleep(6)  # Increased wait time for page to load
+                return True
+        
+        # Try alternative image if first one fails
+        for confidence in [0.7, 0.6, 0.5]:
+            next_button = locate_button("img/next_pagev.png", timeout=3, confidence=confidence)
+            if next_button:
+                logging.info(f"Found next page button using img/next_pagev.png with confidence {confidence}")
+                center_x, center_y = pyautogui.center(next_button)
+                # Move mouse to button position first
+                pyautogui.moveTo(center_x, center_y)
+                time.sleep(0.5)  # Small pause before clicking
+                pyautogui.click()
+                logging.info(f"Clicked next page button at position ({center_x}, {center_y})")
+                time.sleep(6)  # Increased wait time for page to load
+                return True
+        
+        # Try looking for the button in the bottom right area of the screen
+        screen_width, screen_height = pyautogui.size()
+        bottom_right_region = (screen_width // 2, screen_height - 300, screen_width // 2, 300)
+        
+        for confidence in [0.6, 0.5, 0.4]:
+            next_button = locate_button("img/next_page.png", timeout=3, confidence=confidence, region=bottom_right_region)
+            if next_button:
+                logging.info(f"Found next page button in bottom right region with confidence {confidence}")
+                center_x, center_y = pyautogui.center(next_button)
+                pyautogui.click(center_x, center_y)
+                logging.info(f"Clicked next page button at position ({center_x}, {center_y})")
+                time.sleep(6)  # Increased wait time for page to load
+                return True
+        
+        # Try fallback approach - look for the '>' symbol at bottom of page
+        logging.info("Trying fallback approach for next page")
+        # Click in the area where the next button typically is in Google Maps results
+        target_x = screen_width // 2 + 250
+        target_y = screen_height - 150
+        pyautogui.moveTo(target_x, target_y)
+        time.sleep(0.5)
+        pyautogui.click()
+        logging.info(f"Used fallback click at position ({target_x}, {target_y})")
+        time.sleep(6)  # Increased wait time
+        return True
+    except Exception as e:
+        logging.error(f"Error navigating to next page: {str(e)}")
+        return False
+
+def visit_and_check_website(url, page_title):
+    """Visit website and check for chatbot, contact info, etc."""
+    has_chatbot = False
+    phone = ""
+    email = ""
+    contact_url = ""
+    address = ""
+    description = ""
+    location = ""
+    
+    try:
+        # Try to get the page content
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Check for chatbot markers in HTML
+            page_html = response.text.lower()
+            for marker in chatbot_markers:
+                if marker in page_html:
+                    has_chatbot = True
+                    logging.info(f"Chatbot detected on {url} with marker: {marker}")
+                    break
+            
+            # Extract meta description if available
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            if meta_desc and 'content' in meta_desc.attrs:
+                description = meta_desc['content']
+            
+            # Look for contact information
+            # Phone numbers - look for common patterns
+            phone_patterns = [
+                r'\(\d{3}\)\s*\d{3}-\d{4}',  # (123) 456-7890
+                r'\d{3}-\d{3}-\d{4}',          # 123-456-7890
+                r'\d{3}\.\d{3}\.\d{4}',        # 123.456.7890
+                r'\+\d{1,2}\s*\(\d{3}\)\s*\d{3}-\d{4}',  # +1 (123) 456-7890
+                r'\+\d{1,2}\s*\d{3}\s*\d{3}\s*\d{4}'     # +1 123 456 7890
+            ]
+            
+            for pattern in phone_patterns:
+                import re
+                phone_matches = re.findall(pattern, response.text)
+                if phone_matches:
+                    phone = phone_matches[0]
+                    break
+            
+            # Email addresses
+            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+            email_matches = re.findall(email_pattern, response.text)
+            if email_matches:
+                # Filter out common false positives
+                filtered_emails = [e for e in email_matches if not (
+                    'example' in e or 
+                    'your@email' in e or 
+                    'user@' in e or 
+                    'name@' in e
+                )]
+                if filtered_emails:
+                    email = filtered_emails[0]
+            
+            # Look for contact page link
+            contact_links = soup.find_all('a', href=True, text=lambda text: text and 'contact' in text.lower())
+            if contact_links:
+                contact_path = contact_links[0]['href']
+                # Convert relative URL to absolute if needed
+                contact_url = urljoin(url, contact_path)
+            
+            # Try to find location/address information
+            address_candidates = soup.find_all(['p', 'div', 'span'], text=lambda text: text and ('address' in text.lower() or 'location' in text.lower()))
+            if address_candidates:
+                for candidate in address_candidates:
+                    if len(candidate.text) > 10 and len(candidate.text) < 200:  # Reasonable address length
+                        address = candidate.text.strip()
+                        break
+            
+            # Look for location information
+            location_elements = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'div'], 
+                                           text=lambda text: text and ('location' in text.lower() or 'our office' in text.lower()))
+            if location_elements:
+                for elem in location_elements:
+                    if 'location' in elem.text.lower() or 'our office' in elem.text.lower():
+                        location = elem.text.strip()
+                        break
+        else:
+            logging.warning(f"Failed to retrieve {url}: Status code {response.status_code}")
+    except Exception as e:
+        logging.error(f"Error visiting {url} for {page_title}: {str(e)}")
+    
+    return has_chatbot, phone, email, contact_url, address, description, location
