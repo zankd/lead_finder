@@ -219,31 +219,146 @@ def click_places_tab():
 scroll_step = 300  # Pixels to scroll per step
 result_offset = 80  # Vertical distance between results
 
-def count_website_buttons(timeout=5):
-    """Count all website buttons visible on the current page"""
+def count_website_buttons_with_progressive_scrolling(timeout=5):
+    """Count all website buttons visible on the current page with progressive scrolling"""
     screen_width, screen_height = pyautogui.size()
     all_buttons = []
-    y_position = 300  # Start from top of results
+    scroll_count = 0
+    max_scrolls = 10  # Maximum number of scrolls to prevent infinite loops
+    max_buttons = 10  # Maximum number of buttons to find (typical for Google Places)
     
-    # Scan the page in sections to find all buttons
-    while y_position < screen_height - 100:
-        region = (0, y_position, screen_width, 300)  # Search in a window of 300px height
+    # Start from the top of results
+    for _ in range(3):  # Ensure we're at the top
+        pyautogui.press('home')
+        time.sleep(0.5)
+    
+    # Initial scan before scrolling
+    logging.info("Scanning for website buttons with progressive scrolling")
+    initial_buttons = scan_visible_area_for_buttons(300, screen_height - 100, screen_width)
+    for button in initial_buttons:
+        # More strict duplicate detection - check both X and Y coordinates
+        if not is_duplicate_button(button, all_buttons):
+            all_buttons.append(button)
+            logging.info(f"Found website button at ({button[0]}, {button[1]}) with confidence 0.8")
+    
+    # Progressive scrolling and scanning
+    while scroll_count < max_scrolls and len(all_buttons) < max_buttons:
+        # Scroll down using page down for more consistent scrolling
+        pyautogui.press('pagedown')
+        time.sleep(1)
+        scroll_count += 1
+        
         try:
-            button = pyautogui.locateOnScreen("img/webss.png", confidence=0.7, region=region)
-            if button:
-                center_x, center_y = pyautogui.center(button)
-                # Check if this button is already in our list (avoid duplicates)
-                if not any(abs(center_y - y) < 20 for _, y in all_buttons):
-                    all_buttons.append((center_x, center_y))
-                y_position = center_y + 50  # Move past this button
-            else:
-                y_position += 200  # Move down if no button found
+            # Scan the visible area after scrolling
+            buttons = scan_visible_area_for_buttons(300, screen_height - 100, screen_width)
+            
+            # Add new buttons to our list (avoiding duplicates)
+            new_buttons_found = False
+            for button in buttons:
+                if not is_duplicate_button(button, all_buttons):
+                    all_buttons.append(button)
+                    new_buttons_found = True
+                    logging.info(f"Found website button at ({button[0]}, {button[1]}) with confidence 0.8 after scroll")
+            
+            # If we've found enough buttons or no new buttons after multiple scrolls, stop
+            if len(all_buttons) >= max_buttons or (scroll_count >= 3 and not new_buttons_found):
+                break
+                
         except Exception as e:
-            logging.warning(f"Error during button counting: {str(e)}")
-            y_position += 200  # Move down on error
+            logging.warning(f"Error during button counting after scroll: {str(e)}")
     
-    logging.info(f"Found {len(all_buttons)} website buttons on current page")
-    return all_buttons
+    # Wait a bit to ensure all buttons are found
+    time.sleep(2)
+    
+    # Validate and filter buttons to ensure we have a reasonable set
+    validated_buttons = validate_buttons(all_buttons)
+    
+    logging.info(f"Found {len(validated_buttons)} website buttons on current page")
+    return validated_buttons
+
+def is_duplicate_button(new_button, existing_buttons, threshold=30):
+    """Check if a button is a duplicate of any existing button"""
+    x, y = new_button
+    for ex_x, ex_y in existing_buttons:
+        # Calculate Euclidean distance between points
+        distance = ((x - ex_x) ** 2 + (y - ex_y) ** 2) ** 0.5
+        if distance < threshold:
+            return True
+    return False
+
+def validate_buttons(buttons):
+    """Validate and filter buttons to ensure we have a reasonable set"""
+    if not buttons:
+        return []
+    
+    # Sort buttons by Y coordinate (top to bottom)
+    sorted_buttons = sorted(buttons, key=lambda b: b[1])
+    
+    # Group buttons by their approximate Y position (rows)
+    rows = []
+    current_row = [sorted_buttons[0]]
+    y_threshold = 30  # Buttons within this many pixels vertically are considered in the same row
+    
+    for i in range(1, len(sorted_buttons)):
+        if abs(sorted_buttons[i][1] - current_row[0][1]) < y_threshold:
+            # Same row
+            current_row.append(sorted_buttons[i])
+        else:
+            # New row
+            rows.append(current_row)
+            current_row = [sorted_buttons[i]]
+    
+    if current_row:
+        rows.append(current_row)
+    
+    # Take at most one button from each row (the rightmost one, which is typically the website button)
+    validated = []
+    for row in rows:
+        # Sort by X coordinate (left to right) and take the rightmost
+        rightmost = sorted(row, key=lambda b: b[0], reverse=True)[0]
+        validated.append(rightmost)
+    
+    # Limit to a reasonable number (Google typically shows 8-10 results per page)
+    max_buttons = 10
+    return validated[:max_buttons]
+
+def scan_visible_area_for_buttons(start_y, end_y, screen_width):
+    """Scan the currently visible area for website buttons"""
+    buttons = []
+    y_position = start_y
+    
+    # Use smaller step size for more thorough scanning
+    step_size = 150
+    
+    # Try different confidence levels for better detection
+    confidence_levels = [0.7, 0.65, 0.6]
+    
+    while y_position < end_y:
+        region = (0, y_position, screen_width, 300)  # Search in a window of 300px height
+        button_found = False
+        
+        for confidence in confidence_levels:
+            try:
+                button = pyautogui.locateOnScreen("img/webss.png", confidence=confidence, region=region)
+                if button:
+                    center_x, center_y = pyautogui.center(button)
+                    buttons.append((center_x, center_y))
+                    y_position = center_y + 50  # Move past this button
+                    button_found = True
+                    break
+            except Exception as e:
+                # Continue trying with lower confidence
+                pass
+        
+        if not button_found:
+            y_position += step_size  # Move down if no button found with any confidence level
+    
+    return buttons
+
+def count_website_buttons(timeout=5):
+    """Count all website buttons visible on the current page"""
+    # Use the new progressive scrolling function
+    return count_website_buttons_with_progressive_scrolling(timeout)
 
 def click_website_button(timeout=5, previous_y=None, button_positions=None, button_index=0):
     """Click website button with position tracking"""
@@ -618,7 +733,7 @@ def process_search_term(search_term):
     for page in range(1, max_pages + 1):
         logging.info(f"Processing Places page {page} for '{search_term}'")
         
-        # First, count all website buttons on the page
+        # First, count all website buttons on the page using progressive scrolling
         main_window.activate()
         time.sleep(1)
         
@@ -627,20 +742,8 @@ def process_search_term(search_term):
             pyautogui.press('home')
             time.sleep(0.5)
         
-        # Count all website buttons on the current page
-        all_buttons = []
-        for scan_attempt in range(3):  # Multiple scan attempts to ensure we find all buttons
-            logging.info(f"Scanning for website buttons (attempt {scan_attempt+1}/3)")
-            
-            # Count buttons
-            buttons = count_website_buttons()
-            if buttons:
-                all_buttons = buttons
-                break
-            
-            # If no buttons found, try scrolling and scanning again
-            scroll_down_for_more_results()
-            time.sleep(2)
+        # Count all website buttons on the current page with progressive scrolling
+        all_buttons = count_website_buttons_with_progressive_scrolling()
         
         num_buttons = len(all_buttons)
         logging.info(f"Found {num_buttons} website buttons on page {page}")
@@ -672,7 +775,10 @@ def process_search_term(search_term):
                     time.sleep(2)
         else:
             # Process each button systematically
-            with alive_bar(num_buttons, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
+            # Verify the number of buttons is reasonable (Google typically shows 8-10 results per page)
+            actual_buttons = min(num_buttons, 10)  # Cap at 10 buttons to prevent processing non-existent buttons
+            
+            with alive_bar(actual_buttons, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
                 processed_count = 0
                 
                 # Scroll back to top before starting
@@ -681,9 +787,12 @@ def process_search_term(search_term):
                     time.sleep(0.5)
                 
                 # Process each button one by one
-                for button_idx in range(num_buttons):
+                for button_idx in range(actual_buttons):
                     main_window.activate()
                     time.sleep(1)
+                    
+                    # Add logging to show which button we're processing
+                    logging.info(f"Clicking pre-counted button {button_idx+1}/{actual_buttons} at position ({all_buttons[button_idx][0]}, {all_buttons[button_idx][1]})")
                     
                     # Process current business with our improved tracking
                     result, _ = process_business_listing(
@@ -700,23 +809,11 @@ def process_search_term(search_term):
                     
                     bar()
                     
-                    # Scroll down periodically to ensure buttons remain visible
-                    if button_idx > 0 and button_idx % 3 == 0:
-                        main_window.activate()
-                        time.sleep(1)
-                        scroll_down_for_more_results()
-                        time.sleep(2)
-                        
-                        # Re-count buttons after scrolling to ensure we have all
-                        new_buttons = count_website_buttons()
-                        if len(new_buttons) > len(all_buttons):
-                            # Add any new buttons we found
-                            existing_positions = {(x, y) for x, y in all_buttons}
-                            for x, y in new_buttons:
-                                if (x, y) not in existing_positions:
-                                    all_buttons.append((x, y))
-                            num_buttons = len(all_buttons)
-                            logging.info(f"Updated button count to {num_buttons}")
+                    # Return to the main window and ensure it's active
+                    main_window.activate()
+                    time.sleep(1)
+                    
+                    # No need to re-count buttons since we already found them all with progressive scrolling
         
         logging.info(f"Processed {processed_count} businesses on page {page}")
         
