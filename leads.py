@@ -20,7 +20,7 @@ logging.basicConfig(
     ]
 )
 
-chrome_path = r"C:\Users\ZnK\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
+chrome_path = r"C:\Users\XDF\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
 visited_urls_file = 'visited_urls.txt'
 search_terms = [
     "plumbers new york",
