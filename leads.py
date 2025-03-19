@@ -20,7 +20,7 @@ logging.basicConfig(
     ]
 )
 
-chrome_path = r"C:\Users\XDF\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
+chrome_path = r"C:\Users\ZnK\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
 visited_urls_file = 'visited_urls.txt'
 search_terms = [
     "plumbers new york",
@@ -42,39 +42,15 @@ def get_base_url(url):
     return f'{parsed_uri.scheme}://{parsed_uri.netloc}'
 
 def load_visited_urls(file_path):
-    visited_urls = set()
     if os.path.exists(file_path):
         with open(file_path, 'r') as file:
-            for line in file:
-                url = line.strip()
-                if url:
-                    # Add both the full URL and its base domain to avoid duplicates
-                    visited_urls.add(url)
-                    base_url = get_base_url(url)
-                    if base_url:
-                        visited_urls.add(base_url)
-    logging.info(f"Loaded {len(visited_urls)} visited URLs from {file_path}")
-    return visited_urls
+            return set(line.strip().split(',')[0] for line in file)
+    return set()
 
 def save_visited_urls(file_path, visited_urls):
-    # Ensure we don't lose existing URLs when saving
-    existing_urls = set()
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as file:
-            for line in file:
-                url = line.strip()
-                if url:
-                    existing_urls.add(url)
-    
-    # Combine with new URLs
-    all_urls = existing_urls.union(visited_urls)
-    
-    # Write all URLs back to file
     with open(file_path, 'w') as file:
-        for url in all_urls:
+        for url in visited_urls:
             file.write(url + '\n')
-    
-    logging.info(f"Saved {len(all_urls)} URLs to {file_path}")
 
 def initialize_csv():
     if not os.path.exists(results_csv):
@@ -219,63 +195,9 @@ def click_places_tab():
 scroll_step = 300  # Pixels to scroll per step
 result_offset = 80  # Vertical distance between results
 
-def count_website_buttons():
-    """Count all website buttons visible on the current page"""
-    try:
-        buttons = []
-        # Try to find website buttons with different confidence levels
-        confidence_levels = [0.8, 0.7, 0.6]
-        
-        for confidence in confidence_levels:
-            try:
-                # Find all instances of the website button
-                button_locations = list(pyautogui.locateAllOnScreen("img/webss.png", confidence=confidence))
-                
-                if button_locations:
-                    # Convert button locations to center coordinates
-                    for loc in button_locations:
-                        center_x, center_y = pyautogui.center(loc)
-                        # Check if this position is already recorded (within a small margin)
-                        is_duplicate = any(
-                            abs(x - center_x) < 10 and abs(y - center_y) < 10
-                            for x, y in buttons
-                        )
-                        if not is_duplicate:
-                            buttons.append((center_x, center_y))
-                    
-                    if buttons:
-                        logging.info(f"Found {len(buttons)} website buttons with confidence {confidence}")
-                        break
-            except Exception as e:
-                logging.warning(f"Error during button counting: {str(e)}")
-                continue
-        
-        return buttons
-    except Exception as e:
-        logging.warning(f"Error during button counting: {str(e)}")
-        return []
-
-def click_website_button(timeout=5, previous_y=None, button_positions=None, button_index=0):
+def click_website_button(timeout=5, previous_y=None):
     """Click website button with position tracking"""
     screen_width, screen_height = pyautogui.size()
-    
-    # If we have pre-counted button positions, use those
-    if button_positions and button_index < len(button_positions):
-        center_x, center_y = button_positions[button_index]
-        logging.info(f"Clicking pre-counted button {button_index+1}/{len(button_positions)} at position ({center_x}, {center_y})")
-        
-        # Open in new tab
-        pyautogui.moveTo(center_x, center_y)
-        pyautogui.keyDown('ctrl')
-        pyautogui.click()
-        pyautogui.keyUp('ctrl')
-        
-        # Move cursor to avoid hover effects
-        pyautogui.moveTo(center_x, center_y + result_offset)
-        time.sleep(3)
-        return center_y + result_offset, True  # Return position and success flag
-    
-    # Fallback to old method if no pre-counted buttons or index out of range
     min_region_height = 200  # Increased minimum search area height
     
     # Define regions to search in
@@ -301,7 +223,7 @@ def click_website_button(timeout=5, previous_y=None, button_positions=None, butt
             website_button = locate_button("img/webss.png", timeout=timeout)
         except Exception as e:
             logging.warning(f"Error locating button in full screen: {str(e)}")
-            return None, False
+            return None
 
     if website_button:
         center_x, center_y = pyautogui.center(website_button)
@@ -315,19 +237,19 @@ def click_website_button(timeout=5, previous_y=None, button_positions=None, butt
         # Move cursor to avoid hover effects
         pyautogui.moveTo(center_x, center_y + result_offset)
         time.sleep(3)
-        return center_y + result_offset, True  # Return last clicked position and success flag
+        return center_y + result_offset  # Return last clicked position
     else:
         logging.warning("Button not found: img/webss.png")
-        return None, False
+        return None
 
-def process_business_listing(main_window, visited_urls, search_term, last_y_position, button_positions=None, button_index=0):
+def process_business_listing(main_window, visited_urls, search_term, last_y_position):
     try:
         main_window.activate()
         time.sleep(1)
         
-        # Track button positions using our improved mechanism
-        new_y, success = click_website_button(previous_y=last_y_position, button_positions=button_positions, button_index=button_index)
-        if not success:
+        # Track button positions
+        new_y = click_website_button(previous_y=last_y_position)
+        if not new_y:
             return False, last_y_position
         
         time.sleep(3)
@@ -338,24 +260,11 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
         
         try:
             current_url = get_current_url()
-            base_url = get_base_url(current_url)
-            
-            if current_url in visited_urls or base_url in visited_urls:
+            if current_url in visited_urls:
                 logging.info(f"Skipping duplicate: {current_url}")
-                # Close tab and return
-                pyautogui.hotkey('ctrl', 'w')
-                time.sleep(1)
-                main_window.activate()
                 return False, new_y
             
-            # Add both full URL and base URL to visited_urls
             visited_urls.add(current_url)
-            visited_urls.add(base_url)
-            
-            # Save to visited_urls.txt immediately to prevent duplicates across runs
-            with open(visited_urls_file, 'a') as file:
-                file.write(current_url + '\n')
-            
             page_title = get_page_title()
             
             # Perform scraping with updated return values
@@ -369,6 +278,10 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
             pyautogui.hotkey('ctrl', 'w')
             time.sleep(1)
             main_window.activate()
+            
+            # Navigate to next result
+            pyautogui.press('down')
+            time.sleep(0.5)
             
             return True, new_y
     
@@ -525,7 +438,9 @@ def extract_contact_info(soup, url):
     return phone, email, contact_url, address
 
 def visit_and_check_website(url, business_name):
+    """Visit a website and check for chatbots and extract required information"""
     try:
+        # Get the page content
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -580,35 +495,17 @@ def scroll_down_for_more_results():
         logging.error(f"Scrolling error: {str(e)}")
 
 def navigate_to_next_page():
-    logging.info("Navigating to next page")
-    
-    # Scroll down to find the next page button
     for _ in range(10):
         pyautogui.scroll(-700)
         time.sleep(0.5)
     
-    # Try multiple next page button images with different confidence levels
-    next_button = None
-    for image_path in ["img/next_page.png", "img/next_pagev.png", "img/nn.png"]:
-        if os.path.exists(image_path):
-            for confidence in [0.8, 0.7, 0.6, 0.5]:
-                next_button = locate_button(image_path, timeout=3, confidence=confidence)
-                if next_button:
-                    logging.info(f"Found next page button using {image_path} with confidence {confidence}")
-                    break
-        if next_button:
-            break
-    
+    next_button = locate_button("img/next_page.png", timeout=5)
     if next_button:
-        # Click the next page button
-        center_x, center_y = pyautogui.center(next_button)
-        pyautogui.click(center_x, center_y)
-        logging.info(f"Clicked next page button at position ({center_x}, {center_y})")
-        time.sleep(5)  # Wait for page to load
+        pyautogui.click(next_button)
+        time.sleep(5)
         return True
-    else:
-        logging.warning("Next page button not found")
-        return False
+    
+    return False
 
 def process_search_term(search_term):
     """Process a single search term"""
@@ -628,116 +525,33 @@ def process_search_term(search_term):
     for page in range(1, max_pages + 1):
         logging.info(f"Processing Places page {page} for '{search_term}'")
         
-        # Count all website buttons on the current page with progressive scrolling
-        all_buttons = []
-        last_button_count = 0
-        consecutive_no_new = 0
-        max_no_new_attempts = 3  # Stop if we don't find new buttons after this many attempts
+        processed_count = 0
+        max_businesses_per_page = 10
         
-        while consecutive_no_new < max_no_new_attempts:
-            # Count buttons at current scroll position
-            buttons = count_website_buttons()
-            if buttons:
-                # Add any new buttons we haven't seen before
-                existing_positions = {(x, y) for x, y in all_buttons}
-                for x, y in buttons:
-                    if (x, y) not in existing_positions:
-                        all_buttons.append((x, y))
+        last_y_position = None  # Initialize position tracking
+        with alive_bar(max_businesses_per_page, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
+            for business_idx in range(max_businesses_per_page):
+                main_window.activate()
+                time.sleep(1)
                 
-                # Check if we found any new buttons
-                if len(all_buttons) > last_button_count:
-                    consecutive_no_new = 0
-                    last_button_count = len(all_buttons)
-                    logging.info(f"Found {len(buttons)} website buttons, total unique: {len(all_buttons)}")
-                else:
-                    consecutive_no_new += 1
-            else:
-                consecutive_no_new += 1
-            
-            # Scroll down to look for more buttons
-            scroll_down_for_more_results()
-            time.sleep(2)
-        
-        num_buttons = len(all_buttons)
-        logging.info(f"Found total of {num_buttons} website buttons on page {page}")
-        
-        if num_buttons == 0:
-            logging.warning(f"No website buttons found on page {page}, trying fallback approach")
-            # Fallback to old approach if no buttons found
-            processed_count = 0
-            max_businesses_per_page = 10
-            last_y_position = None
-            
-            with alive_bar(max_businesses_per_page, title=f'Places Page {page} (Fallback)', bar='filling', spinner='dots_waves') as bar:
-                for business_idx in range(max_businesses_per_page):
+                # Update this line to pass last_y_position
+                result, last_y_position = process_business_listing(main_window, visited_urls, search_term, last_y_position)
+                if result:
+                    processed_count += 1
+                
+                bar()
+                
+                # Scroll down a bit to see more results after every few businesses
+                if business_idx % 3 == 2:
+                    # Make sure main window is active before scrolling
                     main_window.activate()
                     time.sleep(1)
-                    
-                    result, last_y_position = process_business_listing(main_window, visited_urls, search_term, last_y_position)
-                    if result:
-                        processed_count += 1
-                    
-                    bar()
-                    
-                    # Scroll down after every few businesses
-                    if business_idx % 3 == 2:
-                        main_window.activate()
-                        time.sleep(1)
-                        scroll_down_for_more_results()
-                    
-                    time.sleep(2)
-        else:
-            # Process each button systematically
-            with alive_bar(num_buttons, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
-                processed_count = 0
+                    scroll_down_for_more_results()
                 
-                # Scroll back to top before starting
-                for _ in range(5):
-                    pyautogui.press('home')
-                    time.sleep(0.5)
-                
-                # Process each button one by one
-                for button_idx in range(num_buttons):
-                    main_window.activate()
-                    time.sleep(1)
-                    
-                    # Process current business with our improved tracking
-                    result, _ = process_business_listing(
-                        main_window, 
-                        visited_urls, 
-                        search_term, 
-                        None,  # No need for last_y_position when using pre-counted buttons
-                        all_buttons, 
-                        button_idx
-                    )
-                    
-                    if result:
-                        processed_count += 1
-                    
-                    bar()
-                    
-                    # Scroll down periodically to ensure buttons remain visible
-                    if button_idx > 0 and button_idx % 3 == 0:
-                        main_window.activate()
-                        time.sleep(1)
-                        scroll_down_for_more_results()
-                        time.sleep(2)
-                        
-                        # Re-count buttons after scrolling to ensure we have all
-                        new_buttons = count_website_buttons()
-                        if len(new_buttons) > len(all_buttons):
-                            # Add any new buttons we found
-                            existing_positions = {(x, y) for x, y in all_buttons}
-                            for x, y in new_buttons:
-                                if (x, y) not in existing_positions:
-                                    all_buttons.append((x, y))
-                            num_buttons = len(all_buttons)
-                            logging.info(f"Updated button count to {num_buttons}")
+                # Wait before processing next business
+                time.sleep(2)
         
         logging.info(f"Processed {processed_count} businesses on page {page}")
-        
-        # Save visited URLs to file
-        save_visited_urls(visited_urls_file, visited_urls)
         
         # Navigate to the next page if not on the last page
         if page < max_pages:
