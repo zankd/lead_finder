@@ -59,74 +59,58 @@ def initialize_csv():
             writer.writerow(['Search Term', 'URL', 'Title', 'Description', 'Has Chatbot', 'Phone', 'Email', 'Contact URL', 'Location'])
 
 def save_to_csv(search_term, business_name, url, has_chatbot, phone, email, contact_url, address, description, location):
-    # Format has_chatbot as YES/NO instead of True/False
     has_chatbot_formatted = "YES" if has_chatbot else "NO"
     
-    # Format phone number to ensure it has country code if available
     formatted_phone = phone
     if phone and not phone.startswith("+"):
         formatted_phone = "+1 " + phone
     
-    # Clean up and limit location data
     cleaned_location = location
     if cleaned_location:
-        # Remove 'Locations' prefix if present
         if cleaned_location.lower().startswith("locations"):
             cleaned_location = cleaned_location[9:].strip()
         
-        # Extract main address components and limit length
         location_parts = cleaned_location.split(",")
         if len(location_parts) > 2:
-            # Keep only city and state/country
             cleaned_location = ", ".join(location_parts[-2:]).strip()
         
-        # Limit overall length
         cleaned_location = cleaned_location[:100]
     
     with open(results_csv, 'a', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
-        # Ensure the order matches the desired format: Search Term,URL,Title,Description,Has Chatbot,Phone,Email,Contact URL,Location
         writer.writerow([search_term, url, business_name, description, has_chatbot_formatted, formatted_phone, email, contact_url, cleaned_location])
     logging.info(f"Saved data for {business_name} - {url}")
 
 def locate_button(image_path, timeout=10, region=None, confidence=0.8):
     start_time = time.time()
-    # Try with multiple monitor configurations
     screen_width, screen_height = pyautogui.size()
     
-    # Store original image path for logging
     original_image_path = image_path
     
-    # Check if image file exists
     if not os.path.exists(image_path):
         logging.error(f"Image file not found: {image_path}")
         return None
     
     while time.time() - start_time < timeout:
         try:
-            # Try different confidence levels if initial attempt fails
             confidence_levels = [confidence, 0.7, 0.6, 0.5, 0.4, 0.3]
             for conf in confidence_levels:
-                # Try with the specified region first
                 if region:
                     button = pyautogui.locateOnScreen(image_path, confidence=conf, region=region)
                     if button:
                         logging.info(f"Button found: {original_image_path} with confidence {conf}")
                         return button
                 
-                # If no region specified or not found in region, try full screen
                 button = pyautogui.locateOnScreen(image_path, confidence=conf)
                 if button:
                     logging.info(f"Button found: {original_image_path}")
                     return button
                 
-                # Small delay between retries
                 time.sleep(0.2)
         except pyautogui.ImageNotFoundException:
             pass
         except Exception as e:
             logging.warning(f"Image search error: {str(e)}")
-            # Continue trying with other confidence levels
         
         time.sleep(0.5)
     
@@ -159,7 +143,6 @@ def click_places_tab():
     logging.info("Looking for Places tab")
     time.sleep(7)
     
-    # Try to find the Places tab with different confidence levels
     places_tab = locate_button("img/places.png", timeout=10, confidence=0.7)
     if places_tab:
         center_x, center_y = pyautogui.center(places_tab)
@@ -168,17 +151,14 @@ def click_places_tab():
         time.sleep(3)
         return True
     
-    # If Places tab not found, try fallback mechanisms
     try:
-        # Get screen dimensions for all monitors
         screen_width, screen_height = pyautogui.size()
         
-        # Try multiple potential positions where Places tab might be
         fallback_positions = [
-            (screen_width // 4, 200),  # Standard position
-            (480, 200),               # Fixed position that worked before
-            (screen_width // 4, 150), # Slightly higher
-            (screen_width // 4, 250)  # Slightly lower
+            (screen_width // 4, 200),
+            (480, 200),
+            (screen_width // 4, 150),
+            (screen_width // 4, 250)
         ]
         
         for pos_x, pos_y in fallback_positions:
@@ -186,14 +166,11 @@ def click_places_tab():
             pyautogui.click(pos_x, pos_y)
             time.sleep(2)
             
-            # Check if we can find the web.png button after clicking, which would indicate
-            # that we successfully clicked the Places tab
             web_button = locate_button("img/webss.png", timeout=3, confidence=0.6)
             if web_button:
                 logging.info("Places tab click successful (verified by finding web button)")
                 return True
         
-        # If all fallback positions fail, use the most reliable one as last resort
         logging.warning("All fallback positions failed, using last resort position")
         pyautogui.click(480, 200)
         time.sleep(3)
@@ -202,32 +179,26 @@ def click_places_tab():
         logging.error(f"Error clicking Places tab: {str(e)}")
         return False
 
-# Add new configuration variables
-scroll_step = 300  # Pixels to scroll per step
-result_offset = 80  # Vertical distance between results
+scroll_step = 300
+result_offset = 80
 
 def click_website_button(timeout=5, previous_y=None):
     """Click website button with position tracking"""
     screen_width, screen_height = pyautogui.size()
-    min_region_height = 200  # Increased minimum search area height
+    min_region_height = 200
     
-    # Define regions to search in
     if previous_y is not None:
-        # Ensure we leave enough search area
         region_height = max(screen_height - previous_y, min_region_height)
         region = (0, previous_y, screen_width, region_height)
     else:
         region = (0, 300, screen_width, screen_height - 300)
 
-    # Try to find the web button in the specified region
     website_button = None
     try:
         website_button = locate_button("img/webss.png", timeout=timeout, region=region)
     except Exception as e:
         logging.warning(f"Error locating button in region: {str(e)}")
-        # Continue to fallback approach
     
-    # If not found in region, try full screen
     if not website_button:
         try:
             logging.info("Trying to find web button in full screen")
@@ -239,16 +210,14 @@ def click_website_button(timeout=5, previous_y=None):
     if website_button:
         center_x, center_y = pyautogui.center(website_button)
         
-        # Open in new tab
         pyautogui.moveTo(center_x, center_y)
         pyautogui.keyDown('ctrl')
         pyautogui.click()
         pyautogui.keyUp('ctrl')
         
-        # Move cursor to avoid hover effects
         pyautogui.moveTo(center_x, center_y + result_offset)
         time.sleep(3)
-        return center_y + result_offset  # Return last clicked position
+        return center_y + result_offset
     else:
         logging.warning("Button not found: img/webss.png")
         return None
@@ -258,14 +227,12 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
         main_window.activate()
         time.sleep(1)
         
-        # Track button positions
         new_y = click_website_button(previous_y=last_y_position)
         if not new_y:
             return False, last_y_position
         
         time.sleep(3)
         
-        # Switch to new tab
         pyautogui.hotkey('ctrl', 'tab')
         time.sleep(1)
         
@@ -278,19 +245,16 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
             visited_urls.add(current_url)
             page_title = get_page_title()
             
-            # Perform scraping with updated return values
             has_chatbot, phone, email, contact_url, address, description, location = visit_and_check_website(current_url, page_title)
             save_to_csv(search_term, page_title, current_url, has_chatbot, phone, email, contact_url, address, description, location)
             
         except Exception as e:
             logging.error(f"Processing error: {str(e)}")
         finally:
-            # Close tab and return
             pyautogui.hotkey('ctrl', 'w')
             time.sleep(1)
             main_window.activate()
             
-            # Navigate to next result
             pyautogui.press('down')
             time.sleep(0.5)
             
@@ -301,7 +265,6 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
         return False, last_y_position
 
 def process_search_term(search_term):
-    """Process a single search term"""
     logging.info(f"\n{'#'*50}\nStarting search for: {search_term}\n{'#'*50}")
     
     visited_urls = load_visited_urls(visited_urls_file)
@@ -311,7 +274,6 @@ def process_search_term(search_term):
     if not main_window:
         return
     
-    # Click on Places tab
     if not click_places_tab():
         logging.error(f"Could not access Places tab for '{search_term}'")
         return
@@ -319,22 +281,19 @@ def process_search_term(search_term):
     for page in range(1, max_pages + 1):
         logging.info(f"Processing Places page {page} for '{search_term}'")
         
-        # Process multiple business listings on the current page
         processed_count = 0
         max_businesses_per_page = 10
         
         with alive_bar(max_businesses_per_page, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
-            last_y = None  # Initialize position tracking
+            last_y = None
             for business_idx in range(max_businesses_per_page):
-                # Make sure main window is active
                 main_window.activate()
                 time.sleep(1)
                 
-                # Process current business with position tracking
                 result, new_y = process_business_listing(main_window, visited_urls, search_term, last_y)
                 if result:
                     processed_count += 1
-                    last_y = new_y  # Update position tracking
+                    last_y = new_y
                 
                 bar()
                 
@@ -349,32 +308,24 @@ def process_search_term(search_term):
         
         logging.info(f"Processed {processed_count} businesses on page {page}")
         
-        # Save visited URLs after processing each page
         save_visited_urls(visited_urls_file, visited_urls)
         logging.info(f"Saved {len(visited_urls)} URLs to {visited_urls_file}")
         
-        # Navigate to the next page if not on the last page
         if page < max_pages:
-            # Make sure main window is active
             main_window.activate()
             time.sleep(1)
             if not navigate_to_next_page():
                 logging.warning(f"Could not navigate to page {page+1}, stopping")
                 break
     
-    # Close only the current tab instead of the main window
     try:
-        # Get the current tab handle
         current_tab = main_window.current_window_handle
-        # Close only the current tab
         main_window.close_current_tab()
-        # Switch back to the first available tab if any exist
         remaining_handles = main_window.window_handles
         if remaining_handles:
             main_window.switch_to.window(remaining_handles[0])
     except Exception as e:
         logging.warning(f"Error while closing tab: {str(e)}")
-        # If closing tab fails, try to switch to another tab
         try:
             remaining_handles = main_window.window_handles
             if remaining_handles:
@@ -401,7 +352,6 @@ def get_current_url():
     return url
 
 def get_page_title():
-    """Get the page title"""
     active_window = gw.getActiveWindow()
     if not active_window:
         return "Unknown"
@@ -447,19 +397,16 @@ def extract_contact_info(soup, url):
     if phone_elements:
         phone = phone_elements[0].get('href').replace('tel:', '')
     
-    # Extract email addresses
     email_elements = soup.select('a[href^="mailto:"]')
     if email_elements:
         email = email_elements[0].get('href').replace('mailto:', '')
     
-    # Look for contact page link
     contact_links = soup.find_all('a', string=lambda s: s and ('contact' in s.lower() or 'get in touch' in s.lower()))
     if contact_links:
         contact_href = contact_links[0].get('href', '')
         if contact_href:
             contact_url = urljoin(url, contact_href)
     
-    # Look for address information
     address_elements = soup.find_all(['p', 'div', 'span'], 
                                     string=lambda s: s and any(x in s.lower() for x in ['address', 'location', 'street', 'avenue', 'blvd', 'road']))
     if address_elements:
@@ -468,9 +415,7 @@ def extract_contact_info(soup, url):
     return phone, email, contact_url, address
 
 def visit_and_check_website(url, business_name):
-    """Visit a website and check for chatbots and extract required information"""
     try:
-        # Get the page content
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -479,22 +424,17 @@ def visit_and_check_website(url, business_name):
         
         has_chatbot = detect_chatbot(soup)
         
-        # Extract contact information
         phone, email, contact_url, address = extract_contact_info(soup, url)
         
-        # Extract description - only from meta description to avoid irrelevant content
         description = ""
         meta_desc = soup.find('meta', {'name': 'description'}) or soup.find('meta', {'property': 'og:description'})
         if meta_desc:
             description = meta_desc.get('content', '').strip()
-            # Limit description length
             if len(description) > 200:
                 description = description[:197] + '...'
         
-        # Extract location from address
         location = address
         
-        # Clean up extracted data
         description = description.replace('\n', ' ').replace('\r', ' ').strip()
         location = location.replace('\n', ' ').replace('\r', ' ').strip()
         
@@ -533,7 +473,6 @@ def navigate_to_next_page():
     return False
 
 def process_search_term(search_term):
-    """Process a single search term"""
     logging.info(f"\n{'#'*50}\nStarting search for: {search_term}\n{'#'*50}")
     
     visited_urls = load_visited_urls(visited_urls_file)
@@ -543,7 +482,6 @@ def process_search_term(search_term):
     if not main_window:
         return
     
-    # Click on Places tab
     if not click_places_tab():
         logging.error(f"Could not access Places tab for '{search_term}'")
         return
@@ -554,58 +492,48 @@ def process_search_term(search_term):
         processed_count = 0
         max_businesses_per_page = 10
         
-        last_y_position = None  # Initialize position tracking
+        last_y_position = None
         with alive_bar(max_businesses_per_page, title=f'Places Page {page}', bar='filling', spinner='dots_waves') as bar:
             for business_idx in range(max_businesses_per_page):
                 main_window.activate()
                 time.sleep(1)
                 
-                # Update this line to pass last_y_position
                 result, last_y_position = process_business_listing(main_window, visited_urls, search_term, last_y_position)
                 if result:
                     processed_count += 1
                 
                 bar()
                 
-                # Scroll down a bit to see more results after every few businesses
                 if business_idx % 3 == 2:
-                    # Make sure main window is active before scrolling
                     main_window.activate()
                     time.sleep(1)
                     scroll_down_for_more_results()
                 
-                # Wait before processing next business
                 time.sleep(2)
         
         logging.info(f"Processed {processed_count} businesses on page {page}")
         
-        # Save visited URLs after processing each page
         save_visited_urls(visited_urls_file, visited_urls)
         logging.info(f"Saved {len(visited_urls)} URLs to {visited_urls_file}")
         
-        # Navigate to the next page if not on the last page
         if page < max_pages:
-            # Make sure main window is active
             main_window.activate()
             time.sleep(1)
             if not navigate_to_next_page():
                 logging.warning(f"Could not navigate to page {page+1}, stopping")
                 break
     
-    # Close the main window
     try:
         main_window.close()
     except:
         pass
 
 def main():
-    # Initialize the CSV file
     initialize_csv()
     
-    # Process each search term
     for search_term in search_terms:
         process_search_term(search_term)
-        time.sleep(5)  # Pause between search terms
+        time.sleep(5)
     
     logging.info("Script completed successfully")
 
