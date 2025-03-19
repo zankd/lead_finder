@@ -20,7 +20,7 @@ logging.basicConfig(
     ]
 )
 
-chrome_path = r"C:\Users\ZnK\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
+chrome_path = r"C:\Users\XnD\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
 visited_urls_file = 'visited_urls.txt'
 search_terms = [
     "plumbers new york",
@@ -29,7 +29,7 @@ search_terms = [
     "auto repair florida"
 ]
 results_csv = 'website_results.csv'
-max_pages = 3
+max_pages = 5
 chatbot_markers = [
     'chat-widget', 'livechat', 'chat-bot', 'chatbot', 'live-chat', 
     'bot-widget', 'zendesk', 'intercom', 'drift', 'freshchat',
