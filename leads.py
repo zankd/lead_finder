@@ -20,7 +20,7 @@ logging.basicConfig(
     ]
 )
 
-chrome_path = r"C:\Users\XnD\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
+chrome_path = r"C:\Users\ZnK\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
 visited_urls_file = 'visited_urls.txt'
 search_terms = [
     "plumbers new york",
@@ -362,11 +362,25 @@ def process_search_term(search_term):
                 logging.warning(f"Could not navigate to page {page+1}, stopping")
                 break
     
-    # Close the main window
+    # Close only the current tab instead of the main window
     try:
-        main_window.close()
-    except:
-        pass
+        # Get the current tab handle
+        current_tab = main_window.current_window_handle
+        # Close only the current tab
+        main_window.close_current_tab()
+        # Switch back to the first available tab if any exist
+        remaining_handles = main_window.window_handles
+        if remaining_handles:
+            main_window.switch_to.window(remaining_handles[0])
+    except Exception as e:
+        logging.warning(f"Error while closing tab: {str(e)}")
+        # If closing tab fails, try to switch to another tab
+        try:
+            remaining_handles = main_window.window_handles
+            if remaining_handles:
+                main_window.switch_to.window(remaining_handles[0])
+        except:
+            pass
 
 def get_current_url():
     pyautogui.hotkey('ctrl', 'l')
