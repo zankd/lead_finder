@@ -67,10 +67,21 @@ def save_to_csv(search_term, business_name, url, has_chatbot, phone, email, cont
     if phone and not phone.startswith("+"):
         formatted_phone = "+1 " + phone
     
-    # Clean up location data - remove 'Locations' prefix if present
+    # Clean up and limit location data
     cleaned_location = location
-    if cleaned_location and cleaned_location.lower().startswith("locations"):
-        cleaned_location = cleaned_location[9:].strip()  # Remove 'Locations' and any leading whitespace
+    if cleaned_location:
+        # Remove 'Locations' prefix if present
+        if cleaned_location.lower().startswith("locations"):
+            cleaned_location = cleaned_location[9:].strip()
+        
+        # Extract main address components and limit length
+        location_parts = cleaned_location.split(",")
+        if len(location_parts) > 2:
+            # Keep only city and state/country
+            cleaned_location = ", ".join(location_parts[-2:]).strip()
+        
+        # Limit overall length
+        cleaned_location = cleaned_location[:100]
     
     with open(results_csv, 'a', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
@@ -294,6 +305,7 @@ def process_search_term(search_term):
     logging.info(f"\n{'#'*50}\nStarting search for: {search_term}\n{'#'*50}")
     
     visited_urls = load_visited_urls(visited_urls_file)
+    logging.info(f"Loaded {len(visited_urls)} visited URLs from {visited_urls_file}")
     main_window = open_search_engine(search_term)
     
     if not main_window:
@@ -336,6 +348,10 @@ def process_search_term(search_term):
                 time.sleep(1.5)
         
         logging.info(f"Processed {processed_count} businesses on page {page}")
+        
+        # Save visited URLs after processing each page
+        save_visited_urls(visited_urls_file, visited_urls)
+        logging.info(f"Saved {len(visited_urls)} URLs to {visited_urls_file}")
         
         # Navigate to the next page if not on the last page
         if page < max_pages:
@@ -452,26 +468,21 @@ def visit_and_check_website(url, business_name):
         # Extract contact information
         phone, email, contact_url, address = extract_contact_info(soup, url)
         
-        # Extract description
+        # Extract description - only from meta description to avoid irrelevant content
         description = ""
         meta_desc = soup.find('meta', {'name': 'description'}) or soup.find('meta', {'property': 'og:description'})
         if meta_desc:
             description = meta_desc.get('content', '').strip()
-        if not description:
-            # Try to get first paragraph or div with substantial text
-            for tag in soup.find_all(['p', 'div']):
-                text = tag.get_text().strip()
-                if len(text) > 100:  # Only consider substantial text
-                    description = text
-                    break
+            # Limit description length
+            if len(description) > 200:
+                description = description[:197] + '...'
         
-        # Extract location from address if not explicitly provided
+        # Extract location from address
         location = address
-        if not location:
-            location_elements = soup.find_all(['p', 'div', 'span'],
-                string=lambda s: s and any(x in s.lower() for x in ['location', 'based in', 'located in', 'serving']))
-            if location_elements:
-                location = location_elements[0].get_text().strip()
+        
+        # Clean up extracted data
+        description = description.replace('\n', ' ').replace('\r', ' ').strip()
+        location = location.replace('\n', ' ').replace('\r', ' ').strip()
         
         for _ in range(3):
             pyautogui.scroll(-500)
@@ -512,6 +523,7 @@ def process_search_term(search_term):
     logging.info(f"\n{'#'*50}\nStarting search for: {search_term}\n{'#'*50}")
     
     visited_urls = load_visited_urls(visited_urls_file)
+    logging.info(f"Loaded {len(visited_urls)} visited URLs from {visited_urls_file}")
     main_window = open_search_engine(search_term)
     
     if not main_window:
@@ -552,6 +564,10 @@ def process_search_term(search_term):
                 time.sleep(2)
         
         logging.info(f"Processed {processed_count} businesses on page {page}")
+        
+        # Save visited URLs after processing each page
+        save_visited_urls(visited_urls_file, visited_urls)
+        logging.info(f"Saved {len(visited_urls)} URLs to {visited_urls_file}")
         
         # Navigate to the next page if not on the last page
         if page < max_pages:
