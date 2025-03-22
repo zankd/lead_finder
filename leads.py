@@ -7,29 +7,33 @@ import pygetwindow as gw
 import logging
 import os
 import csv
+import json
 from alive_progress import alive_bar
 from urllib.parse import urljoin, urlparse
 import pyperclip
+
+# Import HubSpot integration
+from hubspot_integration import send_data_to_hubspot
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('scraper_log.txt'),
+        logging.FileHandler('scraper_log_copy.txt'),
         logging.StreamHandler()
     ]
 )
 
 chrome_path = r"C:\Users\XnD\AppData\Local\Google\Chrome SxS\Application\chrome.exe"
-visited_urls_file = 'visited_urls.txt'
+visited_urls_file = 'visited_urls_copy.txt'
 search_terms = [
     "plumbers new york",
     "electricians manhattan",
     "dentists london",
     "auto repair florida"
 ]
-results_csv = 'website_results.csv'
-max_pages = 5
+results_csv = 'website_results_copy.csv'
+max_pages = 2
 chatbot_markers = [
     'chat-widget', 'livechat', 'chat-bot', 'chatbot', 'live-chat', 
     'bot-widget', 'zendesk', 'intercom', 'drift', 'freshchat',
@@ -56,7 +60,7 @@ def initialize_csv():
     if not os.path.exists(results_csv):
         with open(results_csv, 'w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(['Search Term', 'URL', 'Title', 'Description', 'Has Chatbot', 'Phone', 'Email', 'Contact URL', 'Location'])
+            writer.writerow(['Search Term', 'URL', 'Title', 'Description', 'Has Chatbot', 'Phone', 'Email', 'Contact URL', 'Location', 'Industry', 'City', 'Country'])
 
 def save_to_csv(search_term, business_name, url, has_chatbot, phone, email, contact_url, address, description, location):
     has_chatbot_formatted = "YES" if has_chatbot else "NO"
@@ -76,10 +80,43 @@ def save_to_csv(search_term, business_name, url, has_chatbot, phone, email, cont
         
         cleaned_location = cleaned_location[:100]
     
+    # Extract industry and city from search term
+    from country_mapping import extract_industry_and_city, get_country_from_city
+    industry, city = extract_industry_and_city(search_term)
+    country = get_country_from_city(city)
+    
+    # Save to CSV file
     with open(results_csv, 'a', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
-        writer.writerow([search_term, url, business_name, description, has_chatbot_formatted, formatted_phone, email, contact_url, cleaned_location])
+        writer.writerow([search_term, url, business_name, description, has_chatbot_formatted, formatted_phone, email, contact_url, cleaned_location, industry, city, country])
     logging.info(f"Saved data for {business_name} - {url}")
+    
+    # Send data to HubSpot
+    try:
+        # Extract industry, city and country from search term
+        from country_mapping import extract_industry_and_city, get_country_from_city
+        industry, city = extract_industry_and_city(search_term)
+        country = get_country_from_city(city)
+        
+        hubspot_result = send_data_to_hubspot(
+            business_name=business_name,
+            url=url,
+            description=description,
+            has_chatbot=has_chatbot,
+            phone=formatted_phone,
+            email=email,
+            contact_url=contact_url,
+            location=cleaned_location,
+            industry=industry,
+            city=city,
+            country=country
+        )
+        if hubspot_result:
+            logging.info(f"Successfully sent data to HubSpot for {business_name}")
+        else:
+            logging.warning(f"Failed to send data to HubSpot for {business_name}")
+    except Exception as e:
+        logging.error(f"Error sending data to HubSpot: {str(e)}")
 
 def locate_button(image_path, timeout=10, region=None, confidence=0.8):
     start_time = time.time()
@@ -245,8 +282,8 @@ def process_business_listing(main_window, visited_urls, search_term, last_y_posi
             visited_urls.add(current_url)
             page_title = get_page_title()
             
-            has_chatbot, phone, email, contact_url, address, description, location = visit_and_check_website(current_url, page_title)
-            save_to_csv(search_term, page_title, current_url, has_chatbot, phone, email, contact_url, address, description, location)
+            company_name, has_chatbot, phone, email, contact_url, address, description, location = visit_and_check_website(current_url, page_title)
+            save_to_csv(search_term, company_name, current_url, has_chatbot, phone, email, contact_url, address, description, location)
             
         except Exception as e:
             logging.error(f"Processing error: {str(e)}")
@@ -414,6 +451,63 @@ def extract_contact_info(soup, url):
     
     return phone, email, contact_url, address
 
+def extract_company_name(soup, url, page_title):
+    """
+    Extract the company name from the webpage content using various methods.
+    
+    Args:
+        soup: BeautifulSoup object of the webpage
+        url: URL of the webpage
+        page_title: Original page title as fallback
+        
+    Returns:
+        Extracted company name or original page title if extraction fails
+    """
+    # Try to get company name from og:site_name meta tag (commonly used for company name)
+    og_site = soup.find('meta', {'property': 'og:site_name'})
+    if og_site and og_site.get('content'):
+        return og_site.get('content').strip()
+    
+    # Try to get from schema.org Organization or LocalBusiness structured data
+    schema_org = soup.find('script', {'type': 'application/ld+json'})
+    if schema_org:
+        try:
+            data = json.loads(schema_org.string)
+            if isinstance(data, dict):
+                # Check for name in schema.org data
+                if data.get('@type') in ['Organization', 'LocalBusiness', 'Corporation', 'Company'] and data.get('name'):
+                    return data.get('name')
+                # Check for publisher name
+                if data.get('publisher', {}).get('name'):
+                    return data.get('publisher', {}).get('name')
+        except:
+            pass
+    
+    # Try to get from the title tag - often contains company name
+    title_tag = soup.find('title')
+    if title_tag and title_tag.text:
+        title_text = title_tag.text.strip()
+        # If title contains separator like ' - ' or ' | ', the first part is often the page name
+        # and the last part is often the company name
+        for separator in [' - ', ' | ', ' :: ', ' » ', ' – ']:
+            if separator in title_text:
+                parts = title_text.split(separator)
+                if len(parts) >= 2:
+                    # Usually the last part is the company name
+                    return parts[-1].strip()
+    
+    # Try to get from common header elements
+    for selector in ['header .logo', '.site-title', '#logo', '.brand', '.company-name', '.logo img', '.header .logo']:
+        element = soup.select_one(selector)
+        if element:
+            if element.name == 'img' and element.get('alt'):
+                return element.get('alt').strip()
+            elif element.text:
+                return element.text.strip()
+    
+    # If all else fails, return the original page title
+    return page_title
+
 def visit_and_check_website(url, business_name):
     try:
         headers = {
@@ -421,6 +515,9 @@ def visit_and_check_website(url, business_name):
         }
         response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Extract company name from webpage content
+        company_name = extract_company_name(soup, url, business_name)
         
         has_chatbot = detect_chatbot(soup)
         
@@ -442,7 +539,7 @@ def visit_and_check_website(url, business_name):
             pyautogui.scroll(-500)
             time.sleep(1)
         
-        return has_chatbot, phone, email, contact_url, address, description, location
+        return company_name, has_chatbot, phone, email, contact_url, address, description, location
     
     except Exception as e:
         logging.error(f"Error visiting {url} for {business_name}: {str(e)}")
