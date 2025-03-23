@@ -1,18 +1,12 @@
-import time
+import os, csv, json, time, logging
 import pyautogui
 import requests
-from bs4 import BeautifulSoup
 import webbrowser
 import pygetwindow as gw
-import logging
-import os
-import csv
-import json
+import pyperclip
+from bs4 import BeautifulSoup
 from alive_progress import alive_bar
 from urllib.parse import urljoin, urlparse
-import pyperclip
-
-# Import HubSpot integration
 from hubspot_integration import send_data_to_hubspot
 
 logging.basicConfig(
